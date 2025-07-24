@@ -1,7 +1,7 @@
 # financial_mas_system/agents/trading_strategy_agent.py
 from agents.base_agent import BaseAgent
 from knowledge_graphs.shared_kg_manager import SharedKnowledgeGraphManager
-from utils.llm_utils import llm_query
+from utils.llm_utils import llm_query , extract_json_from_llm_output
 from typing import Any, Dict, List
 import json
 import re # For robust parsing of numerical values from LLM
@@ -50,7 +50,16 @@ class TradingStrategyAgent(BaseAgent):
             "step_info": simulation_step_info
         }
         print(f"Agent '{self.agent_id}': Perceived state: Prices: {market_data_query[:50]}..., Sentiment: {sentiment_query[:50]}..., Portfolio: {portfolio_status_query[:50]}...")
-
+        
+    def _extract_numeric_from_kg_response(self, text: str, default: float = 0.0) -> float:
+        """Helper to extract a float from a string, typically from KG query results."""
+        # The LLM might return an error string like "Error: 429..." if it failed to query the KG.
+        # Ensure we don't try to parse a number from that.
+        if "Error:" in text or "quota" in text.lower():
+            return default # Return default if it's an error message
+        match = re.search(r'[-+]?\d*\.?\d+', text)
+        return float(match.group(0)) if match else default
+    
     def decide(self) -> str:
         """
         Uses its LLM brain to synthesize information, reason about market dynamics,
@@ -99,7 +108,9 @@ class TradingStrategyAgent(BaseAgent):
             f"Example for Sell: `[{{\"symbol\": \"GOOG\", \"type\": \"SELL\", \"quantity\": 5}}]`\n"\
             f"If multiple trades, list them: `[{{\"symbol\": \"AAPL\", \"type\": \"BUY\", \"quantity\": 10}}, {{\"symbol\": \"GOOG\", \"type\": \"SELL\", \"quantity\": 5}}]`\n"\
             f"Ensure quantity is an integer. Consider `min_trade_quantity={self.min_trade_quantity}`.\n"\
-            f"ONLY return the JSON array."
+            f"**IMPORTANT: Output your decision as a JSON list of trade objects. If no trade, output an empty list `[]`.**\n"
+            f"Each object must have 'symbol' (e.g., \"AAPL\"), 'type' (\"BUY\" or \"SELL\"), and 'quantity' (integer > 0).\n"
+            f"ONLY return the JSON array, no other text, no explanations." # Strengthen this line
         )
         
         llm_trade_decision = llm_query(decision_prompt, model=self.llm_brain).strip()
@@ -120,8 +131,8 @@ class TradingStrategyAgent(BaseAgent):
         
         # In this design, the 'execute' for TradingStrategyAgent mainly confirms it pushed to KG.
         # The actual impact (trade execution) is handled by the environment reading the KG.
-        
-        return {"observation": f"Proposed trade signals: {trade_signals_json_str}", "reward": 0.0, "terminated": False, "truncated": False, "info": {"proposed_signals": trade_signals_json_str}}
+        extracted_json_str = extract_json_from_llm_output(trade_signals_json_str)
+        return {"observation": f"Proposed trade signals: {extracted_json_str}", "reward": 0.0, "terminated": False, "truncated": False, "info": {"proposed_signals": extracted_json_str}}
 
     def learn(self, observation: Any, reward: float, terminated: bool, truncated: bool, info: Dict[str, Any]) -> None:
         """

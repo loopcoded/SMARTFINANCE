@@ -149,7 +149,7 @@ if __name__ == "__main__":
     # You can adjust the number of episodes and steps per episode here
     # Start with a small number of steps (e.g., 5-10) to observe interactions
     # before running longer simulations.
-    run_simulation(num_episodes=1, steps_per_episode=10) # Run for 1 episode, 10 daily steps
+    run_simulation(num_episodes=1, steps_per_episode=5) # Run for 1 episode, 10 daily steps
     
     print("\n---------------------------------------------------------------------")
     print("To inspect Knowledge Graphs (after simulation completes):")

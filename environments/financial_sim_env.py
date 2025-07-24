@@ -310,26 +310,40 @@ class FinancialSimulationEnv(gym.Env):
         Parses trade signals from LLM's query result. Expects JSON output for robustness.
         """
         signals = []
+        cleaned_result = llm_query_result.strip() # Remove leading/trailing whitespace
+
+        # Remove any markdown code blocks if the LLM wrapped it
+        if cleaned_result.startswith("```json") and cleaned_result.endswith("```"):
+            cleaned_result = cleaned_result[len("```json"): -len("```")].strip()
+
         try:
-            # LLM is prompted to output a JSON list of trade objects.
-            # Example: [{"symbol": "AAPL", "type": "BUY", "quantity": 10}]
-            parsed_json = json.loads(llm_query_result)
+            parsed_json = json.loads(cleaned_result)
             if isinstance(parsed_json, list):
                 for item in parsed_json:
-                    if all(k in item for k in ["symbol", "type", "quantity"]):
-                        signals.append(item)
+                    if isinstance(item, dict) and all(k in item for k in ["symbol", "type", "quantity"]):
+                        # Basic validation for quantity to be integer > 0
+                        try:
+                            item["quantity"] = int(item["quantity"])
+                            if item["quantity"] > 0:
+                                signals.append(item)
+                            else:
+                                print(f"ENV: Invalid trade quantity (<=0) from LLM: {item}")
+                        except ValueError:
+                            print(f"ENV: Non-integer trade quantity from LLM: {item}")
+                    else:
+                        print(f"ENV: Malformed trade item from LLM: {item}")
             else:
-                print(f"ENV: LLM trade signal result is not a list: {llm_query_result}")
+                print(f"ENV: LLM trade signal result is not a JSON list: {cleaned_result[:100]}...")
         except json.JSONDecodeError:
-            print(f"ENV: LLM trade signal result is not valid JSON: {llm_query_result[:100]}...")
-            # Fallback for non-JSON output (less robust)
-            lower_result = llm_query_result.lower()
+            print(f"ENV: LLM trade signal result is not valid JSON. Raw: {cleaned_result[:100]}...")
+            # Fallback for non-JSON output (less robust, but keeps simulation moving)
+            lower_result = cleaned_result.lower()
             if "buy" in lower_result and "aapl" in lower_result:
-                signals.append({"symbol": "AAPL", "type": "BUY", "quantity": 1}) # Default to 1 share
+                signals.append({"symbol": "AAPL", "type": "BUY", "quantity": 1}) 
             if "sell" in lower_result and "goog" in lower_result:
-                signals.append({"symbol": "GOOG", "type": "SELL", "quantity": 1}) # Default to 1 share
+                signals.append({"symbol": "GOOG", "type": "SELL", "quantity": 1})
         except Exception as e:
-            print(f"ENV: Unexpected error parsing trade signals: {e}. Raw: {llm_query_result[:100]}...")
+            print(f"ENV: Unexpected error parsing trade signals: {e}. Raw: {cleaned_result[:100]}...")
         return signals
 
     def render(self) -> None:

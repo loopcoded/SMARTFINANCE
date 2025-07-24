@@ -1,7 +1,7 @@
 # financial_mas_system/agents/news_sentiment_agent.py
 from agents.base_agent import BaseAgent
 from knowledge_graphs.shared_kg_manager import SharedKnowledgeGraphManager
-from utils.llm_utils import llm_query
+from utils.llm_utils import llm_query , extract_json_from_llm_output
 from typing import Any, Dict, List
 import datetime
 import json
@@ -87,7 +87,7 @@ class NewsSentimentAgent(BaseAgent):
             f"Output your analysis as a JSON list of objects. Each object should have 'entity', 'sentiment', 'score', 'key_event' (or 'market_trend' if applicable).\n"\
             f"Example for Apple: `{{\"entity\": \"AAPL\", \"sentiment\": \"Positive\", \"score\": 0.8, \"key_event\": \"new AI chip\"}}`\n"\
             f"Example for Market: `{{\"entity\": \"Market\", \"sentiment\": \"Neutral\", \"score\": 0.1, \"market_trend\": \"easing inflation concerns\"}}`\n"\
-            f"If no specific key event, use 'N/A'. Only provide the JSON array, no other text."
+            f"Only provide the JSON array, no other text. **Output ONLY the JSON array.**"
         )
         
         llm_sentiment_json = llm_query(sentiment_analysis_prompt, model=self.llm_brain).strip()
@@ -100,10 +100,10 @@ class NewsSentimentAgent(BaseAgent):
         Each fact published is a 'digital pheromone' representing sentiment insight.
         """
         print(f"Agent '{self.agent_id}': Executing: Publishing sentiment facts to Shared KG.")
-        
+        extracted_json_str = extract_json_from_llm_output(sentiment_json_str)
         published_count = 0
         try:
-            sentiment_data_list = json.loads(sentiment_json_str)
+            sentiment_data_list = json.loads(extracted_json_str)
             if not isinstance(sentiment_data_list, list):
                 print(f"Agent '{self.agent_id}': LLM did not output a JSON list for sentiment: {sentiment_json_str[:100]}...")
                 return {"observation": "Failed to parse sentiment data", "reward": -0.1, "terminated": False, "truncated": False, "info": {"sentiment_facts_published": 0}}
@@ -134,10 +134,10 @@ class NewsSentimentAgent(BaseAgent):
                     print(f"Agent '{self.agent_id}': Incomplete sentiment data from LLM: {sentiment_item}")
 
         except json.JSONDecodeError:
-            print(f"Agent '{self.agent_id}': LLM sentiment output was not valid JSON. Raw: {sentiment_json_str[:100]}...")
+            print(f"Agent '{self.agent_id}': LLM sentiment output was not valid JSON. Raw: {extracted_json_str[:100]}...")
             # Fallback if LLM doesn't output JSON
-            if "positive" in sentiment_json_str.lower() or "negative" in sentiment_json_str.lower():
-                self.shared_kg_manager.add_fact("Market", "has_general_sentiment", sentiment_json_str[:50], source_agent_id=self.agent_id)
+            if "positive" in extracted_json_str.lower() or "negative" in extracted_json_str.lower():
+                self.shared_kg_manager.add_fact("Market", "has_general_sentiment", extracted_json_str[:50], source_agent_id=self.agent_id)
                 published_count += 1
         except Exception as e:
             print(f"Agent '{self.agent_id}': An unexpected error occurred during sentiment execution: {e}")

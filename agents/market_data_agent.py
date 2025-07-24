@@ -1,7 +1,8 @@
 # financial_mas_system/agents/market_data_agent.py
 from agents.base_agent import BaseAgent
 from knowledge_graphs.shared_kg_manager import SharedKnowledgeGraphManager
-from utils.llm_utils import llm_query
+from utils.llm_utils import llm_query, extract_json_from_llm_output
+import re
 import requests
 import json
 import datetime
@@ -37,25 +38,49 @@ class MarketDataAgent(BaseAgent):
         parsing_prompt = (
             f"Extract the price and volume for {symbol} from the following text. "
             f"If multiple prices/volumes are mentioned, take the most recent one. "
-            f"Format as JSON: {{\"price\": float, \"volume\": float}}. If not found, return empty JSON {{}}."
+            f"**Output ONLY a JSON object: {{\"price\": float, \"volume\": float}}. If not found, return an empty JSON object: {{}}.**\n"
             f"Text: \"{kg_price_query}\""
         )
         parsed_data_str = llm_query(parsing_prompt, model=self.llm_brain)
-        
+        extracted_json_str = extract_json_from_llm_output(parsed_data_str)
         try:
-            parsed_data = json.loads(parsed_data_str)
-            if "price" in parsed_data and "volume" in parsed_data:
-                price = float(parsed_data["price"])
-                volume = float(parsed_data["volume"])
-                print(f"Agent '{self.agent_id}': Parsed {symbol} data from KG: Price={price}, Volume={volume}")
-                return {"symbol": symbol, "price": price, "volume": volume, "timestamp": str(current_sim_date)}
-        except json.JSONDecodeError:
-            print(f"Agent '{self.agent_id}': Failed to parse JSON from LLM for {symbol}: {parsed_data_str[:50]}...")
-        except Exception as e:
-            print(f"Agent '{self.agent_id}': Error processing LLM output for {symbol}: {e}")
+            parsed_data = json.loads(extracted_json_str)
+            
+            # --- MODIFICATION STARTS HERE ---
+            # Safely get price and volume, defaulting to None if key is missing or value is null/None
+            close_price = parsed_data.get('price')
+            volume = parsed_data.get('volume')
 
-        # Fallback to dummy data if KG query or parsing fails
-        # This fallback uses a simple increment based on the simulation step
+            if close_price is not None and volume is not None:
+                # Attempt to convert to float. If conversion fails, default to 0.0
+                try:
+                    close_price = float(close_price)
+                except (ValueError, TypeError):
+                    close_price = 0.0
+                    print(f"Agent '{self.agent_id}': Warning: Non-numeric price for {symbol} received: {parsed_data.get('price')}")
+                
+                try:
+                    volume = float(volume) # Convert volume to float too for consistency
+                except (ValueError, TypeError):
+                    volume = 0.0
+                    print(f"Agent '{self.agent_id}': Warning: Non-numeric volume for {symbol} received: {parsed_data.get('volume')}")
+                    
+                if close_price > 0 and volume > 0: # Ensure valid data
+                    print(f"Agent '{self.agent_id}': Parsed {symbol} data from KG: Price={close_price}, Volume={volume}")
+                    return {"symbol": symbol, "price": close_price, "volume": volume, "timestamp": str(current_sim_date)}
+                else:
+                    print(f"Agent '{self.agent_id}': Parsed zero/negative price/volume for {symbol}. Using fallback.")
+                    
+            else:
+                print(f"Agent '{self.agent_id}': Price or Volume missing in LLM response for {symbol}. Using fallback.")
+            # --- MODIFICATION ENDS HERE ---
+
+        except json.JSONDecodeError:
+            print(f"Agent '{self.agent_id}': Failed to parse JSON from LLM for {symbol}: {extracted_json_str[:50]}...")
+        except Exception as e:
+            print(f"Agent '{self.agent_id}': Error processing LLM output for {symbol}: {e}. Raw: {extracted_json_str[:50]}...")
+
+        # Fallback to dummy data if KG query or parsing fails or data is invalid
         print(f"Agent '{self.agent_id}': Falling back to dummy data for {symbol}.")
         dummy_price = 100.0 + (self.current_state.get('step_count', 0) % 10) * 0.5 + self.symbols_to_track.index(symbol) * 10
         dummy_volume = 500000 + (self.current_state.get('step_count', 0) % 5) * 10000
@@ -106,7 +131,7 @@ class MarketDataAgent(BaseAgent):
             f"AAPL has_volume 1234567\n"\
             f"Market trend is_bullish\n"\
             f"Economy is_stable\n"\
-            f"Only provide triples. Do not add any other text."
+            f"Only provide triples. Do not add any other text. **Output ONLY the triples, one per line.**"
         )
         
         llm_facts_output = llm_query(data_summary_prompt, model=self.llm_brain)

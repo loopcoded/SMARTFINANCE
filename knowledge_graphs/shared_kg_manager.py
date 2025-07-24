@@ -48,9 +48,11 @@ class SharedKnowledgeGraphManager:
 
         # For agent-generated facts, apply LLM verification
         verification_prompt = (
-            f"Given financial common sense and avoiding contradictions, is the following statement plausible? "
-            f"Statement: \'{subject} {predicate} {obj}\'. "
-            f"Consider if it conflicts with typical market behavior. Respond with \'YES\' or \'NO\' only."
+        f"Given the current general financial context and understanding that agents might provide new observations, "
+        f"is the following statement plausible and likely accurate based on common financial knowledge? "
+        f"Statement: \'{subject} {predicate} {obj}\'. "
+        f"Respond with 'YES' if it seems generally possible, 'NO' if it's highly improbable or contradictory to basic facts. "
+        f"Respond with 'YES' or 'NO' only." # Emphasize the strict output
         )
         llm_response = llm_query(verification_prompt, model=get_llm_model()).strip().upper()
 

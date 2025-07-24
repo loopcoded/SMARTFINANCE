@@ -1,7 +1,7 @@
 # financial_mas_system/agents/risk_compliance_agent.py
 from agents.base_agent import BaseAgent
 from knowledge_graphs.shared_kg_manager import SharedKnowledgeGraphManager
-from utils.llm_utils import llm_query
+from utils.llm_utils import llm_query, extract_json_from_llm_output
 from typing import Any, Dict, List
 import json
 import re # For robust parsing
@@ -53,7 +53,14 @@ class RiskComplianceAgent(BaseAgent):
             "current_portfolio_value_at_start_of_step": self.current_portfolio_value_at_start_of_step
         }
         print(f"Agent '{self.agent_id}': Perceived portfolio: {self.current_state['portfolio_status'][:50]}..., Prices: {self.current_state['market_prices'][:50]}...")
-
+    
+    def _extract_numeric_from_kg_response(self, text: str, default: float = 0.0) -> float:
+        """Helper to extract a float from a string, typically from KG query results."""
+        if "Error:" in text or "quota" in text.lower():
+            return default # Return default if it's an error message
+        match = re.search(r'[-+]?\d*\.?\d+', text)
+        return float(match.group(0)) if match else default
+    
     def decide(self) -> str:
         """
         Uses its LLM brain to evaluate perceived risk and compliance against predefined rules
@@ -105,7 +112,9 @@ class RiskComplianceAgent(BaseAgent):
             f"**IMPORTANT: Output your assessment as a JSON list of alert objects. If no issues, output an empty list `[]`.**\n"\
             f"Each object must have 'type' (e.g., \"HighExposureRisk\", \"DailyLossExceeded\", \"ComplianceBreach\"), 'entity' (e.g., \"AAPL\", \"Portfolio\"), and 'description' (string explaining the issue).\n"\
             f"Example: `[{{\"type\": \"HighExposureRisk\", \"entity\": \"AAPL\", \"description\": \"AAPL exposure exceeds 30% of portfolio value.\"}}]`\n"\
-            f"ONLY return the JSON array."
+            f"**IMPORTANT: Output your assessment as a JSON list of alert objects. If no issues, output an empty list `[]`.**\n"
+            f"Each object must have 'type' (e.g., \"HighExposureRisk\", \"DailyLossExceeded\", \"ComplianceBreach\"), 'entity' (e.g., \"AAPL\", \"Portfolio\"), and 'description' (string explaining the issue).\n"
+            f"ONLY return the JSON array, no other text, no explanations." # Strengthen this line
         )
         
         llm_alerts_json = llm_query(compliance_prompt, model=self.llm_brain).strip()
@@ -121,10 +130,10 @@ class RiskComplianceAgent(BaseAgent):
         Executes by parsing the LLM's alerts JSON string and adding them to the Shared KG.
         """
         print(f"Agent '{self.agent_id}': Executing: Publishing risk/compliance alerts to Shared KG.")
-        
+        extracted_json_str = extract_json_from_llm_output(alerts_json_str)
         published_count = 0
         try:
-            alerts = json.loads(alerts_json_str)
+            alerts = json.loads(extracted_json_str)
             if not isinstance(alerts, list):
                 print(f"Agent '{self.agent_id}': LLM alert output is not a JSON list: {alerts_json_str[:100]}...")
                 return {"observation": "Failed to parse alerts", "reward": 0.0, "terminated": False, "truncated": False, "info": {"alerts_published": 0}}
@@ -141,8 +150,8 @@ class RiskComplianceAgent(BaseAgent):
         except json.JSONDecodeError:
             print(f"Agent '{self.agent_id}': LLM alerts output was not valid JSON. Raw: {alerts_json_str[:100]}...")
             # Fallback for non-JSON output (less robust)
-            if "risk" in alerts_json_str.lower() or "compliance" in alerts_json_str.lower():
-                 if self.shared_kg_manager.add_fact("RiskComplianceAlert", "PotentialIssue", alerts_json_str[:100], source_agent_id=self.agent_id):
+            if "risk" in extracted_json_str.lower() or "compliance" in extracted_json_str.lower(): # Use extracted_json_str
+                 if self.shared_kg_manager.add_fact("RiskComplianceAlert", "PotentialIssue", extracted_json_str[:100], source_agent_id=self.agent_id):
                     published_count += 1
         except Exception as e:
             print(f"Agent '{self.agent_id}': An unexpected error occurred during alert execution: {e}")
