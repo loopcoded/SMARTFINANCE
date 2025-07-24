@@ -1,0 +1,4 @@
+.env
+*.gml
+*.log
+venv
